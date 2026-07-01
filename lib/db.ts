@@ -1,12 +1,15 @@
+import { hashSync } from "bcryptjs";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
 import { DEFAULT_SLOT_DURATION_MINUTES, openDaysToDb } from "./court-schedule";
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = process.env.NODE_ENV === "production"
+  ? path.join("/tmp", "court-booking")
+  : path.join(process.cwd(), "data");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const DB_PATH = path.join(DATA_DIR, "app.db");
+const DB_PATH = process.env.SQLITE_DB_PATH ?? path.join(DATA_DIR, "app.db");
 
 // Reuse a single connection across hot-reloads in dev
 const globalForDb = globalThis as unknown as { __db?: DatabaseSync };
@@ -82,6 +85,42 @@ addColumnIfMissing(
 addColumnIfMissing("courts", "openDays", `openDays TEXT NOT NULL DEFAULT '${openDaysToDb(undefined)}'`);
 addColumnIfMissing("courts", "price", `price REAL NOT NULL DEFAULT 0`);
 addColumnIfMissing("bookings", "price", `price REAL NOT NULL DEFAULT 0`);
+
+function ensureDemoData() {
+  const adminUser = db.prepare("SELECT id FROM users WHERE email = ?").get("admin@example.com") as { id: number } | undefined;
+  const clientUser = db.prepare("SELECT id FROM users WHERE email = ?").get("client@example.com") as { id: number } | undefined;
+
+  if (!adminUser) {
+    const adminPasswordHash = hashSync("Admin123!", 10);
+    db.prepare(
+      `INSERT INTO users (name, email, passwordHash, phone, role) VALUES (?, ?, ?, ?, ?)`
+    ).run("Admin User", "admin@example.com", adminPasswordHash, "555-0100", "admin");
+  }
+
+  if (!clientUser) {
+    const clientPasswordHash = hashSync("Client123!", 10);
+    db.prepare(
+      `INSERT INTO users (name, email, passwordHash, phone, role) VALUES (?, ?, ?, ?, ?)`
+    ).run("Demo Client", "client@example.com", clientPasswordHash, "555-0101", "client");
+  }
+
+  const courtCount = db.prepare("SELECT COUNT(*) as count FROM courts").get() as { count: number };
+  if (courtCount.count > 0) {
+    return;
+  }
+
+  db.prepare(
+    `INSERT INTO courts (courtNumber, name, sportType, openingTime, closingTime, slotDurationMinutes, openDays, price, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(1, "Court 1", "Tennis", "08:00", "22:00", 60, "[1,2,3,4,5,6,0]", 25, "active");
+
+  db.prepare(
+    `INSERT INTO courts (courtNumber, name, sportType, openingTime, closingTime, slotDurationMinutes, openDays, price, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(2, "Court 2", "Basketball", "09:00", "21:00", 60, "[1,2,3,4,5]", 20, "active");
+}
+
+ensureDemoData();
 
 export type Role = "client" | "admin";
 export type CourtStatus = "active" | "inactive";
